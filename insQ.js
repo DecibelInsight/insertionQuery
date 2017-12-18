@@ -1,14 +1,18 @@
-var insertionQ = (function () {
+window.insertionQ = (function () {
     "use strict";
 
     var sequence = 100,
-        useTags,
         isAnimationSupported = false,
         animationstring = 'animationName',
         keyframeprefix = '',
         domPrefixes = 'Webkit Moz O ms Khtml'.split(' '),
         pfx = '',
-        elm = document.createElement('div');
+        elm = document.createElement('div'),
+        options = {
+            timeout: 20
+        },
+		MutationObserver = window.MutationObserver||window.WebKitMutationObserver||window.MozMutationObserver,
+		observers = {};
 
     if (elm.style.animationName) {
         isAnimationSupported = true;
@@ -26,21 +30,17 @@ var insertionQ = (function () {
         }
     }
 
-
     function listen(selector, callback) {
         var styleAnimation, animationName = 'insQ_' + (sequence++);
 
         var eventHandler = function (event) {
             if (event.animationName === animationName || event[animationstring] === animationName) {
-                if (!isTagged(event.target)) {
-                    callback(event.target);
-                }
+                callback(event.target);
             }
         };
 
         styleAnimation = document.createElement('style');
-        styleAnimation.innerHTML = '@keyframes ' + animationName + ' {  from {  outline: 1px solid transparent  } to {  outline: 0px solid transparent }  }' +
-            "\n" + '@' + keyframeprefix + 'keyframes ' + animationName + ' {  from {  outline: 1px solid transparent  } to {  outline: 0px solid transparent }  }' +
+        styleAnimation.innerHTML = '@' + keyframeprefix + 'keyframes ' + animationName + ' {  from {  outline: 1px solid transparent  } to {  outline: 0px solid transparent }  }' +
             "\n" + selector + ' { animation-duration: 0.001s; animation-name: ' + animationName + '; ' +
             keyframeprefix + 'animation-duration: 0.001s; ' + keyframeprefix + 'animation-name: ' + animationName + '; ' +
             ' } ';
@@ -52,7 +52,13 @@ var insertionQ = (function () {
             document.addEventListener('MSAnimationStart', eventHandler, false);
             document.addEventListener('webkitAnimationStart', eventHandler, false);
             //event support is not consistent with DOM prefixes
-        }, 20); //starts listening later to skip elements found on startup. this might need tweaking
+        }, options.timeout); //starts listening later to skip elements found on startup. this might need tweaking
+
+		if (MutationObserver
+				&& navigator.userAgent.indexOf('Firefox') !== -1
+				&& (selector.indexOf('select') !== -1 || selector.indexOf('input') !== -1)) {
+			observe(selector, callback);
+		}
 
         return {
             destroy: function () {
@@ -68,78 +74,41 @@ var insertionQ = (function () {
         };
     }
 
-
-    function tag(el) {
-        el['-+-'] = true;
+    function observe(selector, callback) {
+		var observerName = 'observer_'+sequence;
+		observers[observerName] = new MutationObserver(function(mutations) {
+			mutations.forEach(function(mutation) {
+				if (mutation.type === 'childList' && mutation.addedNodes.length) {
+					for(var i=0; i<mutation.addedNodes.length; ++i) {
+						if ($(mutation.addedNodes[i]).is(selector)) {
+							callback(mutation.addedNodes[i]);
+						} else {
+							$(selector, mutation.addedNodes[i]).each(function(){
+								callback(this);
+							});
+						}
+					}
+				}
+			});
+		});
+		observers[observerName].observe(
+			document.querySelector('body'),
+			{childList:true,subtree:true}
+		);
     }
 
-    function isTagged(el) {
-        return (useTags && (el['-+-'] === true));
-    }
-
-    function topmostUntaggedParent(el) {
-        if (isTagged(el.parentNode)) {
-            return el;
-        } else {
-            return topmostUntaggedParent(el.parentNode);
-        }
-    }
-
-    function tagAll(e) {
-        tag(e);
-        e = e.firstChild;
-        for (; e; e = e.nextSibling) {
-            if (e !== undefined && e.nodeType === 1) {
-                tagAll(e);
-            }
-        }
-    }
-
-    //aggregates multiple insertion events into a common parent
-    function catchInsertions(selector, callback) {
-        var insertions = [];
-        //throttle summary
-        var sumUp = (function () {
-            var to;
-            return function () {
-                clearTimeout(to);
-                to = setTimeout(function () {
-                    insertions.forEach(tagAll);
-                    callback(insertions);
-                    insertions = [];
-                }, 10);
-            };
-        })();
-
-        return listen(selector, function (el) {
-            if (isTagged(el)) {
-                return;
-            }
-            tag(el);
-            var myparent = topmostUntaggedParent(el);
-            if (insertions.indexOf(myparent) < 0) {
-                insertions.push(myparent);
-            }
-            sumUp();
-        });
-    }
-
-    return function (selector, notag) {
-        if (isAnimationSupported && selector.match(/[^{}]/)) {
-            useTags = (notag) ? false : true;
-            if (useTags) {
-                tagAll(document.body); //prevents from catching things on show
-            }
+    //insQ function
+    var exports = function (selector) {
+		if (isAnimationSupported && selector.match(/[^{}]/)) {
             return {
                 every: function (callback) {
                     return listen(selector, callback);
-                },
-                summary: function (callback) {
-                    return catchInsertions(selector, callback);
                 }
             };
         } else {
             return false;
         }
     };
+
+    return exports;
 })();
